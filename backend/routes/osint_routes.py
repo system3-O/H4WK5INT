@@ -6,6 +6,8 @@ import logging
 from models import db, OSINTResult, Investigation, User
 from modules.peopint import run_people_intel
 from modules.domain_intel import run_domain_intel
+from modules.imint import run_image_intel
+from modules.geoint import run_geoint
 from utils.tor_proxy import test_tor_connection
 
 osint_bp = Blueprint('osint', __name__)
@@ -203,17 +205,95 @@ def domain_intelligence():
 @osint_bp.route('/imint', methods=['POST'])
 @jwt_required()
 def image_intelligence():
-    """Image Intelligence endpoint - placeholder"""
-    return jsonify({
-        'error': 'Image Intelligence module not yet implemented',
-        'status': 'coming_soon',
-        'available_operations': [
-            'reverse_image_search',
-            'exif_extraction',
-            'metadata_analysis',
-            'facial_recognition'
-        ]
-    }), 501
+    """Image Intelligence endpoint"""
+    try:
+        data = request.get_json()
+        user_id = get_jwt_identity()
+        
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Validate required fields
+        operation = data.get('operation')
+        investigation_id = data.get('investigation_id')
+        
+        if not operation:
+            return jsonify({'error': 'Operation is required'}), 400
+        
+        # Validate investigation if provided
+        investigation = None
+        if investigation_id:
+            investigation = Investigation.query.filter_by(
+                id=investigation_id,
+                user_id=user_id
+            ).first()
+            
+            if not investigation:
+                return jsonify({'error': 'Investigation not found'}), 404
+        
+        # Create OSINT result record
+        osint_result = OSINTResult(
+            module_name='imint',
+            operation_type=operation,
+            query=data.get('image_url', data.get('query', 'image_analysis')),
+            status='pending',
+            investigation_id=investigation_id,
+            metadata={
+                'user_id': user_id,
+                'started_at': datetime.now(timezone.utc).isoformat(),
+                'parameters': data
+            }
+        )
+        
+        if investigation:
+            osint_result.investigation_id = investigation.id
+        
+        db.session.add(osint_result)
+        db.session.commit()
+        
+        try:
+            # Run the operation
+            results = run_image_intel(
+                operation=operation,
+                image_url=data.get('image_url'),
+                image_data=data.get('image_data'),
+                image_path=data.get('image_path'),
+                use_tor=data.get('use_tor', True)
+            )
+            
+            # Update result with success
+            osint_result.status = 'completed'
+            osint_result.results = results
+            osint_result.metadata.update({
+                'completed_at': datetime.now(timezone.utc).isoformat(),
+                'success': True
+            })
+            
+        except Exception as e:
+            # Update result with error
+            osint_result.status = 'failed'
+            osint_result.error_message = str(e)
+            osint_result.metadata.update({
+                'completed_at': datetime.now(timezone.utc).isoformat(),
+                'success': False,
+                'error': str(e)
+            })
+            
+            logger.error(f"Image intelligence operation failed: {e}")
+        
+        db.session.commit()
+        
+        return jsonify({
+            'result_id': str(osint_result.id),
+            'status': osint_result.status,
+            'results': osint_result.results,
+            'error': osint_result.error_message
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Image intelligence endpoint error: {e}")
+        return jsonify({'error': 'Operation failed', 'details': str(e)}), 500
 
 @osint_bp.route('/socmint', methods=['POST'])
 @jwt_required()
@@ -233,17 +313,104 @@ def social_media_intelligence():
 @osint_bp.route('/geoint', methods=['POST'])
 @jwt_required()
 def geographic_intelligence():
-    """Geographic Intelligence endpoint - placeholder"""
-    return jsonify({
-        'error': 'Geographic Intelligence module not yet implemented',
-        'status': 'coming_soon',
-        'available_operations': [
-            'ip_geolocation',
-            'location_search',
-            'geographic_correlation',
-            'osint_mapping'
-        ]
-    }), 501
+    """Geographic Intelligence endpoint"""
+    try:
+        data = request.get_json()
+        user_id = get_jwt_identity()
+        
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Validate required fields
+        operation = data.get('operation')
+        investigation_id = data.get('investigation_id')
+        
+        if not operation:
+            return jsonify({'error': 'Operation is required'}), 400
+        
+        # Determine query based on operation
+        if operation == 'ip_geolocation':
+            query = data.get('ip_address', '')
+        elif operation == 'location_search':
+            query = data.get('query', '')
+        else:
+            query = data.get('query', 'geoint_operation')
+        
+        # Validate investigation if provided
+        investigation = None
+        if investigation_id:
+            investigation = Investigation.query.filter_by(
+                id=investigation_id,
+                user_id=user_id
+            ).first()
+            
+            if not investigation:
+                return jsonify({'error': 'Investigation not found'}), 404
+        
+        # Create OSINT result record
+        osint_result = OSINTResult(
+            module_name='geoint',
+            operation_type=operation,
+            query=query,
+            status='pending',
+            investigation_id=investigation_id,
+            metadata={
+                'user_id': user_id,
+                'started_at': datetime.now(timezone.utc).isoformat(),
+                'parameters': data
+            }
+        )
+        
+        if investigation:
+            osint_result.investigation_id = investigation.id
+        
+        db.session.add(osint_result)
+        db.session.commit()
+        
+        try:
+            # Run the operation
+            results = run_geoint(
+                operation=operation,
+                ip_address=data.get('ip_address'),
+                query=data.get('query'),
+                search_type=data.get('search_type', 'general'),
+                entities=data.get('entities', []),
+                use_tor=data.get('use_tor', True)
+            )
+            
+            # Update result with success
+            osint_result.status = 'completed'
+            osint_result.results = results
+            osint_result.metadata.update({
+                'completed_at': datetime.now(timezone.utc).isoformat(),
+                'success': True
+            })
+            
+        except Exception as e:
+            # Update result with error
+            osint_result.status = 'failed'
+            osint_result.error_message = str(e)
+            osint_result.metadata.update({
+                'completed_at': datetime.now(timezone.utc).isoformat(),
+                'success': False,
+                'error': str(e)
+            })
+            
+            logger.error(f"Geographic intelligence operation failed: {e}")
+        
+        db.session.commit()
+        
+        return jsonify({
+            'result_id': str(osint_result.id),
+            'status': osint_result.status,
+            'results': osint_result.results,
+            'error': osint_result.error_message
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Geographic intelligence endpoint error: {e}")
+        return jsonify({'error': 'Operation failed', 'details': str(e)}), 500
 
 @osint_bp.route('/search', methods=['POST'])
 @jwt_required()
@@ -436,8 +603,41 @@ def list_osint_modules():
             'imint': {
                 'name': 'Image Intelligence',
                 'description': 'Image analysis and reverse image search',
-                'operations': [],
-                'status': 'coming_soon'
+                'operations': [
+                    {
+                        'name': 'reverse_image_search',
+                        'description': 'Reverse search for similar images',
+                        'parameters': {
+                            'required': ['image_url'],
+                            'optional': []
+                        }
+                    },
+                    {
+                        'name': 'exif_extraction',
+                        'description': 'Extract EXIF metadata from images',
+                        'parameters': {
+                            'required': ['image_data'],
+                            'optional': []
+                        }
+                    },
+                    {
+                        'name': 'metadata_analysis',
+                        'description': 'Comprehensive image metadata analysis',
+                        'parameters': {
+                            'required': ['image_path'],
+                            'optional': []
+                        }
+                    },
+                    {
+                        'name': 'facial_recognition',
+                        'description': 'Facial recognition search',
+                        'parameters': {
+                            'required': ['image_data'],
+                            'optional': []
+                        }
+                    }
+                ],
+                'status': 'active'
             },
             'socmint': {
                 'name': 'Social Media Intelligence',
@@ -448,8 +648,33 @@ def list_osint_modules():
             'geoint': {
                 'name': 'Geographic Intelligence',
                 'description': 'Geographic and location-based intelligence',
-                'operations': [],
-                'status': 'coming_soon'
+                'operations': [
+                    {
+                        'name': 'ip_geolocation',
+                        'description': 'Geolocate IP addresses',
+                        'parameters': {
+                            'required': ['ip_address'],
+                            'optional': []
+                        }
+                    },
+                    {
+                        'name': 'location_search',
+                        'description': 'Search for location information',
+                        'parameters': {
+                            'required': ['query'],
+                            'optional': ['search_type']
+                        }
+                    },
+                    {
+                        'name': 'osint_mapping',
+                        'description': 'Map OSINT entities with location data',
+                        'parameters': {
+                            'required': ['entities'],
+                            'optional': []
+                        }
+                    }
+                ],
+                'status': 'active'
             },
             'search': {
                 'name': 'Search Intelligence',
