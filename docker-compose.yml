@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15
+    container_name: h4wk5int_postgres
+    environment:
+      POSTGRES_DB: h4wk5int
+      POSTGRES_USER: h4wk5int
+      POSTGRES_PASSWORD: h4wk5int_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - h4wk5int_network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: h4wk5int_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - h4wk5int_network
+
+  # Tor Proxy
+  tor:
+    image: dperson/torproxy
+    container_name: h4wk5int_tor
+    ports:
+      - "9050:9050"
+      - "9053:9053"
+    environment:
+      - TOR_USER=debian-tor
+    networks:
+      - h4wk5int_network
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: h4wk5int_backend
+    environment:
+      - DATABASE_URL=postgresql://h4wk5int:h4wk5int_password@postgres:5432/h4wk5int
+      - REDIS_URL=redis://redis:6379
+      - TOR_PROXY=socks5://tor:9050
+      - USE_TOR=true
+      - SECRET_KEY=h4wk5int_secret_key_change_in_production
+      - JWT_SECRET=h4wk5int_jwt_secret_change_in_production
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+      - tor
+    volumes:
+      - ./backend:/app
+      - reports_data:/app/reports
+    networks:
+      - h4wk5int_network
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: h4wk5int_frontend
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - h4wk5int_network
+
+  # Nginx Reverse Proxy (Optional)
+  nginx:
+    image: nginx:alpine
+    container_name: h4wk5int_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf
+      - ./docker/ssl:/etc/nginx/ssl
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - h4wk5int_network
+
+volumes:
+  postgres_data:
+  reports_data:
+
+networks:
+  h4wk5int_network:
+    driver: bridge
